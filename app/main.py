@@ -834,21 +834,31 @@ async def root():
             </div>
 
             <div class="card">
-                <div class="card-head"><span class="tab">02 &nbsp; Endpoints</span></div>
+                <div class="card-head"><span class="tab">02 &nbsp; Raw request / response</span></div>
+                <div class="card-body">
+                    <p class="note" style="margin-top:0;">Exact JSON of the last exchange above, in the same shape as the API spec.</p>
+                    <pre id="raw-json">// Send a message in the console above to see the raw request/response here.</pre>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><span class="tab">03 &nbsp; Endpoints (one-click check)</span></div>
                 <div class="card-body">
                     <div class="endpoint-row">
                         <span class="method get">GET</span>
                         <code>/health</code> &mdash; readiness check
+                        &nbsp;<a href="/health" target="_blank">open &rarr;</a>
                     </div>
                     <div class="endpoint-row">
                         <span class="method post">POST</span>
                         <code>/chat</code> &mdash; stateless conversation, full history in every call
+                        &nbsp;<a href="#" onclick="runExampleChat(); return false;">run example &rarr;</a>
                     </div>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-head"><span class="tab">03 &nbsp; From PowerShell</span></div>
+                <div class="card-head"><span class="tab">04 &nbsp; From PowerShell</span></div>
                 <div class="card-body">
                     <pre>Invoke-WebRequest -UseBasicParsing -Uri "{{your-url}}/chat" `
   -Method POST -ContentType "application/json" `
@@ -901,15 +911,17 @@ async def root():
                 sendBtn.disabled = true;
                 sendBtn.textContent = '...';
 
+                const requestBody = {{messages: history}};
                 try {{
                     const res = await fetch('/chat', {{
                         method: 'POST',
                         headers: {{'Content-Type': 'application/json'}},
-                        body: JSON.stringify({{messages: history}})
+                        body: JSON.stringify(requestBody)
                     }});
                     const data = await res.json();
                     renderMessage('agent', data.reply, data.recommendations);
                     history.push({{role: 'assistant', content: data.reply}});
+                    showRawJson(requestBody, data);
                 }} catch (err) {{
                     renderMessage('agent', 'Request failed: ' + err.message, null);
                 }} finally {{
@@ -917,6 +929,21 @@ async def root():
                     sendBtn.textContent = 'Send';
                     input.focus();
                 }}
+            }}
+
+            function showRawJson(request, response) {{
+                const el = document.getElementById('raw-json');
+                el.textContent =
+                    'Request\\n' +
+                    JSON.stringify(request, null, 2) +
+                    '\\n\\nResponse\\n' +
+                    JSON.stringify(response, null, 2);
+            }}
+
+            function runExampleChat() {{
+                const input = document.getElementById('chat-input');
+                input.value = 'I need to hire a Java developer';
+                sendMessage();
             }}
 
             document.getElementById('chat-input').addEventListener('keydown', function(e) {{

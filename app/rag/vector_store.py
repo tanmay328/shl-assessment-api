@@ -9,11 +9,16 @@ class VectorStore:
     def __init__(self, catalog_path: str = "data/catalog.json"):
         self.catalog_path = catalog_path
         
-        # Initialize embedding function
+        # Initialize embedding function.
+        # NOTE: deliberately using ChromaDB's built-in DefaultEmbeddingFunction
+        # (ONNX Runtime based) instead of SentenceTransformerEmbeddingFunction.
+        # The sentence-transformers path pulls in torch + transformers, which
+        # pushed memory usage past Render's free-tier 512MB limit and caused
+        # a repeated OOM-kill crash loop. The ONNX default embedder uses the
+        # same underlying MiniLM-family model but without loading PyTorch,
+        # cutting memory footprint dramatically.
         print("Loading embedding model...")
-        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
         
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(path="./chromadb")

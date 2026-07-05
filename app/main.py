@@ -38,29 +38,40 @@ print(" If running via `docker run -p 8001:8000 ...`, use instead:")
 print("   http://localhost:8001/health")
 print("=" * 60)
 
-# --- Initialize Components ---
-print("\n Initializing components...")
-
-# 1. Vector Store (RAG)
-try:
-    vector_store = VectorStore(catalog_path="data/catalog.json")
-    print(" Vector Store (RAG) initialized")
-except Exception as e:
-    print(f" Vector Store error: {e}")
-    vector_store = None
-
-# 2. LLM Generator
-try:
-    llm = LLMGenerator()
-    print(" LLM Generator initialized")
-except Exception as e:
-    print(f" LLM error: {e}")
-    llm = None
-
-# 3. Evaluator (for metrics)
+# --- Components are initialized lazily on startup, NOT at import time. ---
+# Rationale: Uvicorn cannot bind the port until this module finishes
+# importing. On a cold/slow instance (e.g. Render's free tier), loading
+# the embedding model + indexing 377 catalog items can take longer than
+# the platform's port-scan patience, causing the deploy to look "stuck"
+# even though nothing is actually wrong - it just never got to bind the
+# port. Doing this work in an @app.on_event("startup") handler instead
+# lets Uvicorn bind the port first, then do the slow work afterward.
+vector_store = None
+llm = None
 evaluator = Evaluator()
 
-print("=" * 60)
+@app.on_event("startup")
+async def initialize_components():
+    global vector_store, llm
+    print("\n Initializing components...")
+
+    # 1. Vector Store (RAG)
+    try:
+        vector_store = VectorStore(catalog_path="data/catalog.json")
+        print(" Vector Store (RAG) initialized")
+    except Exception as e:
+        print(f" Vector Store error: {e}")
+        vector_store = None
+
+    # 2. LLM Generator
+    try:
+        llm = LLMGenerator()
+        print(" LLM Generator initialized")
+    except Exception as e:
+        print(f" LLM error: {e}")
+        llm = None
+
+    print("=" * 60)
 
 # --- Helper Functions ---
 def is_vague_query(query: str) -> bool:

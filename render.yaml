@@ -6,6 +6,7 @@ services:
     autoDeploy: true
     buildCommand: |
       pip install -r requirements.txt
+      mkdir -p data
       python -c "import requests; r=requests.get('https://tcp-us-prod-rnd.shl.com/voiceRater/shl-ai-hiring/shl_product_catalog.json'); open('data/catalog.json','wb').write(r.content)"
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:

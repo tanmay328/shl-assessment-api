@@ -566,65 +566,364 @@ def process_conversation(messages: List[Message]) -> ChatResponse:
 # --- API Endpoints ---
 @app.get("/")
 async def root():
-    rag_status = "Ready" if vector_store else "Not Ready"
-    llm_status = "Loaded" if (llm and llm.loaded) else "Fallback Mode"
-    
+    rag_status = "ready" if vector_store else "loading..."
+    llm_status = "connected" if (llm and llm.loaded) else "fallback mode"
+
     return HTMLResponse(f"""
-    <html>
-        <head>
-            <title>SHL Assessment Recommender API</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-                .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-                h1 {{ color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }}
-                .badge {{ display: inline-block; padding: 5px 10px; border-radius: 5px; font-size: 12px; font-weight: bold; }}
-                .llm {{ background: #e74c3c; color: white; }}
-                .rag {{ background: #3498db; color: white; }}
-                .endpoint {{ background: #ecf0f1; padding: 15px; border-radius: 5px; margin: 10px 0; }}
-                .method {{ display: inline-block; padding: 3px 10px; border-radius: 3px; font-weight: bold; }}
-                .get {{ background: #61affe; color: white; }}
-                .post {{ background: #49cc90; color: white; }}
-                .status {{ color: #27ae60; font-weight: bold; }}
-                .info {{ background: #eaf2f8; padding: 10px; border-left: 4px solid #3498db; margin: 10px 0; }}
-                code {{ background: #e8e8e8; padding: 2px 6px; border-radius: 3px; }}
-                pre {{ background: #2c3e50; color: white; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1> SHL Assessment Recommender API</h1>
-                <p><span class="status">[OK]</span> API is running</p>
-                <p>
-                    <span class="badge llm">LLM</span>
-                    <span class="badge rag">RAG</span>
-                    <strong>Powered by:</strong> Phi-2 (LLM) + ChromaDB (RAG)
-                </p>
-                
-                <div class="info">
-                    <strong>Status:</strong><br>
-                    LLM: {llm_status}<br>
-                    RAG: {rag_status}
-                </div>
-                
-                <h2>Endpoints</h2>
-                <div class="endpoint">
-                    <span class="method get">GET</span>
-                    <strong>/health</strong><br>
-                    <code>http://127.0.0.1:8000/health</code>
-                </div>
-                <div class="endpoint">
-                    <span class="method post">POST</span>
-                    <strong>/chat</strong><br>
-                    <code>http://127.0.0.1:8000/chat</code>
-                </div>
-                
-                <h2>Test Command</h2>
-                <pre>
-curl -X POST "http://127.0.0.1:8000/chat" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"messages": [{{"role": "user", "content": "I need to hire a Java developer"}}]}}'</pre>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SHL Assessment Recommender</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+        <style>
+            :root {{
+                --paper: #F6F5F1;
+                --paper-raised: #FFFFFF;
+                --ink: #1C2541;
+                --ink-soft: #4A5578;
+                --accent: #3454D1;
+                --accent-soft: #E8ECFB;
+                --ok: #5B8C6E;
+                --ok-soft: #E5F0E7;
+                --line: #D8D6CC;
+            }}
+            * {{ box-sizing: border-box; }}
+            body {{
+                margin: 0;
+                background: var(--paper);
+                color: var(--ink);
+                font-family: 'Inter', sans-serif;
+                line-height: 1.5;
+            }}
+            .wrap {{
+                max-width: 880px;
+                margin: 0 auto;
+                padding: 48px 24px 80px;
+            }}
+            .eyebrow {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 13px;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--ink-soft);
+                margin: 0 0 8px;
+            }}
+            h1 {{
+                font-family: 'Space Grotesk', sans-serif;
+                font-size: 34px;
+                font-weight: 700;
+                margin: 0 0 6px;
+                letter-spacing: -0.01em;
+            }}
+            .sub {{
+                color: var(--ink-soft);
+                margin: 0 0 28px;
+                font-size: 15px;
+            }}
+            .status-row {{
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+                margin-bottom: 36px;
+            }}
+            .pill {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 12.5px;
+                padding: 6px 12px;
+                border-radius: 100px;
+                background: var(--ok-soft);
+                color: var(--ok);
+                border: 1px solid rgba(91,140,110,0.25);
+            }}
+            .pill.info {{ background: var(--accent-soft); color: var(--accent); border-color: rgba(52,84,209,0.2); }}
+
+            .card {{
+                background: var(--paper-raised);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                overflow: hidden;
+                margin-bottom: 28px;
+            }}
+            .card-head {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 14px 20px;
+                border-bottom: 1px solid var(--line);
+                background: #FBFAF7;
+            }}
+            .card-head .tab {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 12px;
+                color: var(--ink-soft);
+            }}
+            .card-body {{ padding: 20px; }}
+
+            /* --- Live console (signature element) --- */
+            #console-log {{
+                height: 320px;
+                overflow-y: auto;
+                padding: 4px 2px;
+                display: flex;
+                flex-direction: column;
+                gap: 14px;
+            }}
+            .msg {{
+                max-width: 82%;
+                padding: 10px 14px;
+                border-radius: 10px;
+                font-size: 14.5px;
+                white-space: pre-wrap;
+            }}
+            .msg.user {{
+                align-self: flex-end;
+                background: var(--accent);
+                color: white;
+                border-bottom-right-radius: 3px;
+            }}
+            .msg.agent {{
+                align-self: flex-start;
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-bottom-left-radius: 3px;
+            }}
+            .msg .tag {{
+                display: block;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 10.5px;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                opacity: 0.65;
+                margin-bottom: 4px;
+            }}
+            .rec-list {{
+                margin-top: 8px;
+                padding-top: 8px;
+                border-top: 1px dashed var(--line);
+                font-size: 13px;
+            }}
+            .rec-item {{
+                display: flex;
+                justify-content: space-between;
+                gap: 8px;
+                padding: 4px 0;
+            }}
+            .rec-item a {{ color: var(--accent); text-decoration: none; }}
+            .rec-item a:hover {{ text-decoration: underline; }}
+            .rec-type {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11px;
+                color: var(--ink-soft);
+                flex-shrink: 0;
+            }}
+
+            .input-row {{
+                display: flex;
+                gap: 10px;
+                padding: 16px 20px;
+                border-top: 1px solid var(--line);
+                background: #FBFAF7;
+            }}
+            #chat-input {{
+                flex: 1;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                padding: 10px 14px;
+                font-family: 'Inter', sans-serif;
+                font-size: 14.5px;
+                background: white;
+            }}
+            #chat-input:focus {{
+                outline: none;
+                border-color: var(--accent);
+                box-shadow: 0 0 0 3px var(--accent-soft);
+            }}
+            button {{
+                font-family: 'Space Grotesk', sans-serif;
+                font-weight: 600;
+                font-size: 14px;
+                background: var(--accent);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 0 20px;
+                cursor: pointer;
+            }}
+            button:hover {{ background: #2a44b3; }}
+            button:disabled {{ background: #A9B2CE; cursor: not-allowed; }}
+            #reset-btn {{
+                background: transparent;
+                color: var(--ink-soft);
+                border: 1px solid var(--line);
+                font-size: 12px;
+                padding: 6px 12px;
+            }}
+            #reset-btn:hover {{ background: var(--paper); }}
+
+            /* --- Endpoint reference --- */
+            .endpoint-row {{
+                display: flex;
+                align-items: baseline;
+                gap: 10px;
+                padding: 12px 0;
+                border-bottom: 1px solid var(--line);
+                font-size: 14px;
+            }}
+            .endpoint-row:last-child {{ border-bottom: none; }}
+            .method {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 11.5px;
+                font-weight: 500;
+                padding: 3px 8px;
+                border-radius: 4px;
+                flex-shrink: 0;
+            }}
+            .method.get {{ background: var(--accent-soft); color: var(--accent); }}
+            .method.post {{ background: var(--ok-soft); color: var(--ok); }}
+            code {{
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 13px;
+                color: var(--ink-soft);
+            }}
+
+            pre {{
+                background: var(--ink);
+                color: #E8E9F0;
+                padding: 18px 20px;
+                border-radius: 8px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 12.5px;
+                line-height: 1.6;
+                overflow-x: auto;
+                margin: 0;
+            }}
+            .note {{
+                font-size: 13px;
+                color: var(--ink-soft);
+                margin-top: 10px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <p class="eyebrow">Take-home &middot; LLM + RAG</p>
+            <h1>SHL Assessment Recommender</h1>
+            <p class="sub">Describe a role. The agent clarifies, retrieves from the SHL catalog, and refines the shortlist as you go.</p>
+
+            <div class="status-row">
+                <span class="pill">API running</span>
+                <span class="pill info">RAG: {rag_status}</span>
+                <span class="pill info">LLM: {llm_status}</span>
             </div>
-        </body>
+
+            <div class="card">
+                <div class="card-head">
+                    <span class="tab">01 &nbsp; Live console</span>
+                    <button id="reset-btn" onclick="resetConsole()">Reset conversation</button>
+                </div>
+                <div class="card-body">
+                    <div id="console-log"></div>
+                </div>
+                <div class="input-row">
+                    <input id="chat-input" type="text" placeholder="e.g. Hiring a Java developer who works with stakeholders" autocomplete="off">
+                    <button id="send-btn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><span class="tab">02 &nbsp; Endpoints</span></div>
+                <div class="card-body">
+                    <div class="endpoint-row">
+                        <span class="method get">GET</span>
+                        <code>/health</code> &mdash; readiness check
+                    </div>
+                    <div class="endpoint-row">
+                        <span class="method post">POST</span>
+                        <code>/chat</code> &mdash; stateless conversation, full history in every call
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><span class="tab">03 &nbsp; From PowerShell</span></div>
+                <div class="card-body">
+                    <pre>Invoke-WebRequest -UseBasicParsing -Uri "{{your-url}}/chat" `
+  -Method POST -ContentType "application/json" `
+  -Body '{{"messages": [{{"role": "user", "content": "I need to hire a Java developer"}}]}}'</pre>
+                    <p class="note">Replace <code>{{your-url}}</code> with this page's own address. The console above calls the same endpoint directly from your browser.</p>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let history = [];
+
+            function escapeHtml(str) {{
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            }}
+
+            function renderMessage(role, text, recommendations) {{
+                const log = document.getElementById('console-log');
+                const div = document.createElement('div');
+                div.className = 'msg ' + (role === 'user' ? 'user' : 'agent');
+                let html = '<span class="tag">' + (role === 'user' ? 'you' : 'agent') + '</span>' + escapeHtml(text).replace(/\\n/g, '<br>');
+                if (recommendations && recommendations.length > 0) {{
+                    html += '<div class="rec-list">';
+                    recommendations.forEach(function(r) {{
+                        html += '<div class="rec-item"><a href="' + r.url + '" target="_blank">' + escapeHtml(r.name) + '</a><span class="rec-type">' + r.test_type + '</span></div>';
+                    }});
+                    html += '</div>';
+                }}
+                div.innerHTML = html;
+                log.appendChild(div);
+                log.scrollTop = log.scrollHeight;
+            }}
+
+            function resetConsole() {{
+                history = [];
+                document.getElementById('console-log').innerHTML = '';
+            }}
+
+            async function sendMessage() {{
+                const input = document.getElementById('chat-input');
+                const sendBtn = document.getElementById('send-btn');
+                const text = input.value.trim();
+                if (!text) return;
+
+                renderMessage('user', text, null);
+                history.push({{role: 'user', content: text}});
+                input.value = '';
+                sendBtn.disabled = true;
+                sendBtn.textContent = '...';
+
+                try {{
+                    const res = await fetch('/chat', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{messages: history}})
+                    }});
+                    const data = await res.json();
+                    renderMessage('agent', data.reply, data.recommendations);
+                    history.push({{role: 'assistant', content: data.reply}});
+                }} catch (err) {{
+                    renderMessage('agent', 'Request failed: ' + err.message, null);
+                }} finally {{
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = 'Send';
+                    input.focus();
+                }}
+            }}
+
+            document.getElementById('chat-input').addEventListener('keydown', function(e) {{
+                if (e.key === 'Enter') sendMessage();
+            }});
+        </script>
+    </body>
     </html>
     """)
 

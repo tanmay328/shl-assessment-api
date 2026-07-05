@@ -55,9 +55,7 @@ class VectorStore:
         # on every build/deploy, and has occasionally contained raw control
         # characters (e.g. literal newlines/tabs pasted directly into a
         # description field) inside string values. Strict JSON forbids this;
-        # strict=False explicitly allows control characters inside strings,
-        # which is exactly what we need here (blindly stripping \n/\t is
-        # wrong since some of those are legitimate formatting inside text).
+        # strict=False explicitly allows control characters inside strings.
         with open(self.catalog_path, 'r', encoding='utf-8') as f:
             raw = f.read()
         try:
@@ -71,27 +69,42 @@ class VectorStore:
         
         print(f"Indexing {len(catalog_items)} items into vector store...")
         
+        # Batch everything into ONE collection.add() call instead of one
+        # call per item. On a constrained CPU (e.g. Render's free tier),
+        # 377 separate synchronous add() calls - each triggering its own
+        # embedding forward pass - was slow enough to look like a hang.
+        # A single batched call lets the embedding model process all texts
+        # together, which is dramatically faster.
+        documents = []
+        metadatas = []
+        ids = []
         for i, item in enumerate(catalog_items):
-            # Convert all metadata values to strings (ChromaDB requirement)
             metadata = {
                 "name": str(item.get('name', '')),
                 "link": str(item.get('link', '')),
                 "description": str(item.get('description', ''))[:500],
-                "keys": ', '.join(item.get('keys', [])),
+                "keys": ', '.join(item.get('keys', [])) if isinstance(item.get('keys'), list) else str(item.get('keys', '')),
                 "duration": str(item.get('duration', '')),
-                "job_levels": ', '.join(item.get('job_levels', []))
+                "job_levels": ', '.join(item.get('job_levels', [])) if isinstance(item.get('job_levels'), list) else str(item.get('job_levels', ''))
             }
-            
-            # Create rich text for embedding
             text = f"{item['name']} - {item.get('description', '')} " \
-                   f"Keys: {', '.join(item.get('keys', []))} " \
-                   f"Job Levels: {', '.join(item.get('job_levels', []))}"
-            
+                   f"Keys: {metadata['keys']} " \
+                   f"Job Levels: {metadata['job_levels']}"
+            documents.append(text)
+            metadatas.append(metadata)
+            ids.append(item.get('entity_id', f"id_{i}"))
+
+        # Chunk into batches of 100 to keep individual requests reasonably
+        # sized while still being far fewer than one-per-item.
+        batch_size = 100
+        for start in range(0, len(documents), batch_size):
+            end = start + batch_size
             self.collection.add(
-                documents=[text],
-                metadatas=[metadata],
-                ids=[item.get('entity_id', f"id_{i}")]
+                documents=documents[start:end],
+                metadatas=metadatas[start:end],
+                ids=ids[start:end]
             )
+            print(f"  Indexed batch {start}-{min(end, len(documents))} of {len(documents)}")
         
         print(f"Successfully indexed {len(catalog_items)} items into vector store")
     

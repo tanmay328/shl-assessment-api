@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.2
+chromadb==0.5.5
+sentence-transformers==3.0.1
+transformers==4.44.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu
+requests==2.32.3
+python-multipart==0.0.9
+python-dotenv==1.0.1
+huggingface-hub==0.24.6

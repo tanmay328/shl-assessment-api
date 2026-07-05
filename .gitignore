@@ -1,0 +1,41 @@
+# Secrets - never commit
+.env
+*.env
+.env.*
+
+# Python virtual environment
+venv/
+venv/*
+venv/**/*
+env/
+.venv/
+
+# Python cache/bytecode
+__pycache__/
+__pycache__/**
+*.pyc
+*.pyo
+*.pyd
+*/__pycache__/
+
+# Vector store / generated data (regenerated at build/runtime, don't commit)
+chromadb/
+data/
+*.sqlite3
+*.db
+
+# HuggingFace / model caches (large, re-downloaded at runtime)
+.cache/
+**/.cache/
+huggingface_cache/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

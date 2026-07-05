@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.vscode/
+chromadb/
+data/
+.env
+.gitignore
+*.md

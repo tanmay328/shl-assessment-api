@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Tuple
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 import time
+import threading
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,20 +39,21 @@ print(" If running via `docker run -p 8001:8000 ...`, use instead:")
 print("   http://localhost:8001/health")
 print("=" * 60)
 
-# --- Components are initialized lazily on startup, NOT at import time. ---
-# Rationale: Uvicorn cannot bind the port until this module finishes
-# importing. On a cold/slow instance (e.g. Render's free tier), loading
-# the embedding model + indexing 377 catalog items can take longer than
-# the platform's port-scan patience, causing the deploy to look "stuck"
-# even though nothing is actually wrong - it just never got to bind the
-# port. Doing this work in an @app.on_event("startup") handler instead
-# lets Uvicorn bind the port first, then do the slow work afterward.
+# --- Components are initialized lazily, in a BACKGROUND THREAD, not at
+# import time and not by blocking the startup event. ---
+# Rationale: Uvicorn does not actually open the port for traffic until
+# after the ASGI "startup" event finishes - so even putting this work in
+# an @app.on_event("startup") handler still blocks port binding if it's
+# awaited directly. On a cold/slow instance (e.g. Render's free tier),
+# loading the embedding model + indexing 377 catalog items took long
+# enough that Render's port scanner gave up entirely. Running it in a
+# daemon thread lets the startup event return immediately, so the port
+# opens right away while initialization continues in parallel.
 vector_store = None
 llm = None
 evaluator = Evaluator()
 
-@app.on_event("startup")
-async def initialize_components():
+def _initialize_components_sync():
     global vector_store, llm
     print("\n Initializing components...")
 
@@ -72,6 +74,12 @@ async def initialize_components():
         llm = None
 
     print("=" * 60)
+
+@app.on_event("startup")
+async def initialize_components():
+    # Fire-and-forget: do NOT await this, or we're back to blocking the
+    # port bind on slow model loading.
+    threading.Thread(target=_initialize_components_sync, daemon=True).start()
 
 # --- Helper Functions ---
 def is_vague_query(query: str) -> bool:

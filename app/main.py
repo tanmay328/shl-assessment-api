@@ -599,9 +599,18 @@ async def root():
                 line-height: 1.5;
             }}
             .wrap {{
-                max-width: 880px;
+                max-width: 1180px;
                 margin: 0 auto;
                 padding: 48px 24px 80px;
+            }}
+            .split-row {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                align-items: start;
+            }}
+            @media (max-width: 860px) {{
+                .split-row {{ grid-template-columns: 1fr; }}
             }}
             .eyebrow {{
                 font-family: 'JetBrains Mono', monospace;
@@ -741,6 +750,34 @@ async def root():
                 border-color: var(--accent);
                 box-shadow: 0 0 0 3px var(--accent-soft);
             }}
+            #raw-input {{
+                width: 100%;
+                min-height: 110px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                padding: 12px 14px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 12.5px;
+                background: white;
+                resize: vertical;
+                margin-bottom: 10px;
+            }}
+            #raw-input:focus {{
+                outline: none;
+                border-color: var(--accent);
+                box-shadow: 0 0 0 3px var(--accent-soft);
+            }}
+            .raw-actions {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 12px;
+            }}
+            .raw-error {{
+                color: #B3452C;
+                font-size: 12.5px;
+                margin-top: 6px;
+            }}
             button {{
                 font-family: 'Space Grotesk', sans-serif;
                 font-weight: 600;
@@ -819,25 +856,37 @@ async def root():
                 <span class="pill info">LLM: {llm_status}</span>
             </div>
 
-            <div class="card">
-                <div class="card-head">
-                    <span class="tab">01 &nbsp; Live console</span>
-                    <button id="reset-btn" onclick="resetConsole()">Reset conversation</button>
+            <div class="split-row">
+                <div class="card">
+                    <div class="card-head">
+                        <span class="tab">01 &nbsp; Live console</span>
+                        <button id="reset-btn" onclick="resetConsole()">Reset conversation</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="console-log"></div>
+                    </div>
+                    <div class="input-row">
+                        <input id="chat-input" type="text" placeholder="e.g. Hiring a Java developer who works with stakeholders" autocomplete="off">
+                        <button id="send-btn" onclick="sendMessage()">Send</button>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <div id="console-log"></div>
-                </div>
-                <div class="input-row">
-                    <input id="chat-input" type="text" placeholder="e.g. Hiring a Java developer who works with stakeholders" autocomplete="off">
-                    <button id="send-btn" onclick="sendMessage()">Send</button>
-                </div>
-            </div>
 
-            <div class="card">
-                <div class="card-head"><span class="tab">02 &nbsp; Raw request / response</span></div>
-                <div class="card-body">
-                    <p class="note" style="margin-top:0;">Exact JSON of the last exchange above, in the same shape as the API spec.</p>
-                    <pre id="raw-json">// Send a message in the console above to see the raw request/response here.</pre>
+                <div class="card">
+                    <div class="card-head"><span class="tab">02 &nbsp; Raw request / response</span></div>
+                    <div class="card-body">
+                        <p class="note" style="margin-top:0;">Edit the JSON below and send it straight to <code>/chat</code> &mdash; same shape as the API spec, independent of the console's conversation state.</p>
+                        <textarea id="raw-input" spellcheck="false">{{
+  "messages": [
+    {{"role": "user", "content": "I need to hire a Java developer"}}
+  ]
+}}</textarea>
+                        <div class="raw-actions">
+                            <button id="raw-send-btn" onclick="sendRawRequest()">Send raw request</button>
+                            <button id="raw-reset-btn" onclick="resetRawInput()" style="background:transparent;color:var(--ink-soft);border:1px solid var(--line);font-size:12px;padding:6px 12px;">Reset example</button>
+                        </div>
+                        <div id="raw-error" class="raw-error"></div>
+                        <pre id="raw-json">// Response will appear here after sending.</pre>
+                    </div>
                 </div>
             </div>
 
@@ -852,10 +901,11 @@ async def root():
                     <div class="endpoint-row">
                         <span class="method post">POST</span>
                         <code>/chat</code> &mdash; stateless conversation, full history in every call
-                        &nbsp;<a href="#" onclick="runExampleChat(); return false;">run example &rarr;</a>
+                        &nbsp;<a href="#" onclick="runExampleChat(); return false;">run example in console &rarr;</a>
                     </div>
                 </div>
             </div>
+
 
             <div class="card">
                 <div class="card-head"><span class="tab">04 &nbsp; From PowerShell</span></div>
@@ -921,7 +971,6 @@ async def root():
                     const data = await res.json();
                     renderMessage('agent', data.reply, data.recommendations);
                     history.push({{role: 'assistant', content: data.reply}});
-                    showRawJson(requestBody, data);
                 }} catch (err) {{
                     renderMessage('agent', 'Request failed: ' + err.message, null);
                 }} finally {{
@@ -931,13 +980,46 @@ async def root():
                 }}
             }}
 
-            function showRawJson(request, response) {{
-                const el = document.getElementById('raw-json');
-                el.textContent =
-                    'Request\\n' +
-                    JSON.stringify(request, null, 2) +
-                    '\\n\\nResponse\\n' +
-                    JSON.stringify(response, null, 2);
+            const RAW_EXAMPLE = JSON.stringify({{messages: [{{role: 'user', content: 'I need to hire a Java developer'}}]}}, null, 2);
+
+            async function sendRawRequest() {{
+                const raw = document.getElementById('raw-input');
+                const errorEl = document.getElementById('raw-error');
+                const outEl = document.getElementById('raw-json');
+                const sendBtn = document.getElementById('raw-send-btn');
+                errorEl.textContent = '';
+
+                let parsed;
+                try {{
+                    parsed = JSON.parse(raw.value);
+                }} catch (err) {{
+                    errorEl.textContent = 'Invalid JSON: ' + err.message;
+                    return;
+                }}
+
+                sendBtn.disabled = true;
+                sendBtn.textContent = 'Sending...';
+                try {{
+                    const res = await fetch('/chat', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify(parsed)
+                    }});
+                    const data = await res.json();
+                    outEl.textContent =
+                        'Request\\n' + JSON.stringify(parsed, null, 2) +
+                        '\\n\\nResponse (' + res.status + ')\\n' + JSON.stringify(data, null, 2);
+                }} catch (err) {{
+                    outEl.textContent = 'Request failed: ' + err.message;
+                }} finally {{
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = 'Send raw request';
+                }}
+            }}
+
+            function resetRawInput() {{
+                document.getElementById('raw-input').value = RAW_EXAMPLE;
+                document.getElementById('raw-error').textContent = '';
             }}
 
             function runExampleChat() {{

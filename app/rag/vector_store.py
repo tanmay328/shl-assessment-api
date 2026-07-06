@@ -9,42 +9,40 @@ class VectorStore:
     def __init__(self, catalog_path: str = "data/catalog.json"):
         self.catalog_path = catalog_path
         
-        # Initialize embedding function.
-        # NOTE: deliberately using ChromaDB's built-in DefaultEmbeddingFunction
-        # (ONNX Runtime based) instead of SentenceTransformerEmbeddingFunction.
-        # The sentence-transformers path pulls in torch + transformers, which
-        # pushed memory usage past Render's free-tier 512MB limit and caused
-        # a repeated OOM-kill crash loop. The ONNX default embedder uses the
-        # same underlying MiniLM-family model but without loading PyTorch,
-        # cutting memory footprint dramatically.
-        print("Loading embedding model...")
-        self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+        # 1. READ ENVIRONMENT VARIABLES FROM RENDER
+        # Grab your standalone Chroma server URL and Hugging Face API Token
+        CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:8000")
+        HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN") 
         
-        # Initialize ChromaDB client
-        self.client = chromadb.PersistentClient(path="./chromadb")
+        print("Connecting to remote Hugging Face Embedding API...")
+        # Outsource the embedding generation to Hugging Face Cloud (Zero local RAM overhead)
+        self.embedding_fn = embedding_functions.HuggingFaceEmbeddingFunction(
+            api_key=HF_TOKEN,
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
         
-        # Delete existing collection if it exists (to fix metadata issue)
-        try:
-            self.client.delete_collection("shl_catalog")
-            print("Removed old collection with metadata issues")
-        except:
-            pass
+        print(f"Connecting to remote Chroma server at: {CHROMA_SERVER_URL}")
+        # Connect via HTTP Client to your separate Chroma Web Service container
+        self.client = chromadb.HttpClient(host=CHROMA_SERVER_URL)
         
-        # Create new collection
+        # Create or fetch the collection on the remote instance
         self.collection = self.client.get_or_create_collection(
             name="shl_catalog",
             embedding_function=self.embedding_fn
         )
         
-        # Load catalog if collection is empty
-        if self.collection.count() == 0:
-            self.load_catalog()
-        else:
-            print(f"Vector store already has {self.collection.count()} items")
+        # Load catalog if the remote collection is completely empty
+        try:
+            item_count = self.collection.count()
+            if item_count == 0:
+                self.load_catalog()
+            else:
+                print(f"Remote vector store already has {item_count} items")
+        except Exception as e:
+            print(f"Error checking or initializing collection status: {e}")
     
     def load_catalog(self):
         """Load catalog items into vector database"""
-        # Download catalog if not exists
         if not os.path.exists(self.catalog_path):
             print("Downloading catalog...")
             import requests
@@ -56,30 +54,17 @@ class VectorStore:
                 f.write(response.content)
             print("Catalog downloaded successfully!")
         
-        # Load catalog — the file is freshly scraped from a live SHL endpoint
-        # on every build/deploy, and has occasionally contained raw control
-        # characters (e.g. literal newlines/tabs pasted directly into a
-        # description field) inside string values. Strict JSON forbids this;
-        # strict=False explicitly allows control characters inside strings.
         with open(self.catalog_path, 'r', encoding='utf-8') as f:
             raw = f.read()
         try:
             items = json.loads(raw, strict=False)
         except json.JSONDecodeError as e:
-            print(f"Catalog JSON invalid even with strict=False: {e}")
+            print(f"Catalog JSON invalid: {e}")
             raise
         
-        # Filter for individual test solutions
         catalog_items = [item for item in items if 'link' in item and 'name' in item]
+        print(f"Indexing {len(catalog_items)} items into remote vector store...")
         
-        print(f"Indexing {len(catalog_items)} items into vector store...")
-        
-        # Batch everything into ONE collection.add() call instead of one
-        # call per item. On a constrained CPU (e.g. Render's free tier),
-        # 377 separate synchronous add() calls - each triggering its own
-        # embedding forward pass - was slow enough to look like a hang.
-        # A single batched call lets the embedding model process all texts
-        # together, which is dramatically faster.
         documents = []
         metadatas = []
         ids = []
@@ -92,16 +77,13 @@ class VectorStore:
                 "duration": str(item.get('duration', '')),
                 "job_levels": ', '.join(item.get('job_levels', [])) if isinstance(item.get('job_levels'), list) else str(item.get('job_levels', ''))
             }
-            text = f"{item['name']} - {item.get('description', '')} " \
-                   f"Keys: {metadata['keys']} " \
-                   f"Job Levels: {metadata['job_levels']}"
+            text = f"{item['name']} - {item.get('description', '')} Keys: {metadata['keys']} Job Levels: {metadata['job_levels']}"
             documents.append(text)
             metadatas.append(metadata)
             ids.append(item.get('entity_id', f"id_{i}"))
 
-        # Chunk into batches of 100 to keep individual requests reasonably
-        # sized while still being far fewer than one-per-item.
-        batch_size = 100
+        # Chunk items into network-friendly batch sizes to prevent request timeout limits
+        batch_size = 50
         for start in range(0, len(documents), batch_size):
             end = start + batch_size
             self.collection.add(
@@ -111,7 +93,7 @@ class VectorStore:
             )
             print(f"  Indexed batch {start}-{min(end, len(documents))} of {len(documents)}")
         
-        print(f"Successfully indexed {len(catalog_items)} items into vector store")
+        print(f"Successfully indexed {len(catalog_items)} items into remote vector store")
     
     def search(self, query: str, k: int = 10) -> List[Dict]:
         """Search for relevant assessments using semantic similarity (RAG)"""

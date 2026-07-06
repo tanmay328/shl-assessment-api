@@ -3,6 +3,7 @@ from chromadb.utils import embedding_functions
 import json
 import os
 import re
+from urllib.parse import urlparse
 from typing import List, Dict, Optional
 
 class VectorStore:
@@ -10,36 +11,63 @@ class VectorStore:
         self.catalog_path = catalog_path
         
         # 1. READ ENVIRONMENT VARIABLES FROM RENDER
-        # Grab your standalone Chroma server URL and Hugging Face API Token
         CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:8000")
         HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN") 
         
         print("Connecting to remote Hugging Face Embedding API...")
-        # Outsource the embedding generation to Hugging Face Cloud (Zero local RAM overhead)
         self.embedding_fn = embedding_functions.HuggingFaceEmbeddingFunction(
             api_key=HF_TOKEN,
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
         
-        print(f"Connecting to remote Chroma server at: {CHROMA_SERVER_URL}")
-        # Connect via HTTP Client to your separate Chroma Web Service container
-        self.client = chromadb.HttpClient(host=CHROMA_SERVER_URL)
+        # 2. DEFENSIVE URL CLEANING AND CONFIGURATION
+        # Parse host gracefully to completely avoid [Errno -5] DNS configuration errors
+        parsed_url = urlparse(CHROMA_SERVER_URL)
+        clean_host = parsed_url.hostname or CHROMA_SERVER_URL.replace("https://", "").replace("http://", "").split("/")[0]
         
-        # Create or fetch the collection on the remote instance
-        self.collection = self.client.get_or_create_collection(
-            name="shl_catalog",
-            embedding_function=self.embedding_fn
-        )
+        print(f"Connecting to remote Chroma host parsed as: '{clean_host}'")
         
-        # Load catalog if the remote collection is completely empty
         try:
+            # Detect protocol configuration automatically based on Render domains
+            if "onrender.com" in clean_host:
+                self.client = chromadb.HttpClient(
+                    host=clean_host,
+                    port=443,
+                    ssl=True
+                )
+            else:
+                # Default configuration behavior for local debugging environments
+                self.client = chromadb.HttpClient(
+                    host=clean_host,
+                    port=8000,
+                    ssl=False
+                )
+            
+            # Create or fetch the collection on the remote instance
+            self.collection = self.client.get_or_create_collection(
+                name="shl_catalog",
+                embedding_function=self.embedding_fn
+            )
+            
+            # Load catalog if the remote collection is completely empty
             item_count = self.collection.count()
             if item_count == 0:
                 self.load_catalog()
             else:
                 print(f"Remote vector store already has {item_count} items")
+                
         except Exception as e:
             print(f"Error checking or initializing collection status: {e}")
+            print("Activating local embedded fallback client to maintain uptime...")
+            
+            # Safe localized instance backup configuration to completely safeguard runtime
+            self.client = chromadb.PersistentClient(path="./chromadb")
+            self.collection = self.client.get_or_create_collection(
+                name="shl_catalog",
+                embedding_function=self.embedding_fn
+            )
+            if self.collection.count() == 0:
+                self.load_catalog()
     
     def load_catalog(self):
         """Load catalog items into vector database"""
@@ -63,7 +91,7 @@ class VectorStore:
             raise
         
         catalog_items = [item for item in items if 'link' in item and 'name' in item]
-        print(f"Indexing {len(catalog_items)} items into remote vector store...")
+        print(f"Indexing {len(catalog_items)} items into vector store...")
         
         documents = []
         metadatas = []
@@ -83,7 +111,7 @@ class VectorStore:
             ids.append(item.get('entity_id', f"id_{i}"))
 
         # Chunk items into network-friendly batch sizes to prevent request timeout limits
-        batch_size = 50
+        batch_size = 40
         for start in range(0, len(documents), batch_size):
             end = start + batch_size
             self.collection.add(
@@ -93,7 +121,7 @@ class VectorStore:
             )
             print(f"  Indexed batch {start}-{min(end, len(documents))} of {len(documents)}")
         
-        print(f"Successfully indexed {len(catalog_items)} items into remote vector store")
+        print(f"Successfully indexed {len(catalog_items)} items into vector store")
     
     def search(self, query: str, k: int = 10) -> List[Dict]:
         """Search for relevant assessments using semantic similarity (RAG)"""
@@ -104,8 +132,10 @@ class VectorStore:
             )
             
             recommendations = []
-            if results['metadatas']:
+            if results and results.get('metadatas') and len(results['metadatas']) > 0:
                 for metadata in results['metadatas'][0]:
+                    if not metadata:
+                        continue
                     keys = metadata.get('keys', '').split(', ')
                     test_type = self._get_test_type(keys)
                     recommendations.append({

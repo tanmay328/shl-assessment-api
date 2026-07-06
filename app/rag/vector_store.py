@@ -10,28 +10,38 @@ class VectorStore:
         self.catalog_path = catalog_path
         
         # 1. READ ENVIRONMENT VARIABLES FROM RENDER
-        # Grab your standalone Chroma server URL and Hugging Face API Token
         CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:8000")
         HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN") 
         
         print("Connecting to remote Hugging Face Embedding API...")
-        # Outsource the embedding generation to Hugging Face Cloud (Zero local RAM overhead)
         self.embedding_fn = embedding_functions.HuggingFaceEmbeddingFunction(
             api_key=HF_TOKEN,
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
         
         print(f"Connecting to remote Chroma server at: {CHROMA_SERVER_URL}")
-        # Connect via HTTP Client to your separate Chroma Web Service container
-        self.client = chromadb.HttpClient(host=CHROMA_SERVER_URL)
         
-        # Create or fetch the collection on the remote instance
+        # 2. DYNAMICALLY PARSE & CLEAN HOSTNAME TO PREVENT [Errno -5]
+        # This strips out protocols and trailing paths, providing clean DNS resolution
+        clean_host = CHROMA_SERVER_URL.replace("https://", "").replace("http://", "").strip("/")
+        
+        # If it contains 'onrender.com', we MUST connect using secure SSL on port 443
+        is_ssl = "onrender.com" in clean_host
+        
+        # 3. INITIALIZE HTTP CLIENT EXPLICITLY
+        self.client = chromadb.HttpClient(
+            host=clean_host,
+            ssl=is_ssl,
+            port=443 if is_ssl else 8000
+        )
+        
+        # Create or fetch collection on the standalone server
         self.collection = self.client.get_or_create_collection(
             name="shl_catalog",
             embedding_function=self.embedding_fn
         )
         
-        # Load catalog if the remote collection is completely empty
+        # Check if the database needs initial population
         try:
             item_count = self.collection.count()
             if item_count == 0:
@@ -82,7 +92,7 @@ class VectorStore:
             metadatas.append(metadata)
             ids.append(item.get('entity_id', f"id_{i}"))
 
-        # Chunk items into network-friendly batch sizes to prevent request timeout limits
+        # Process in chunks of 50 to avoid network request limits
         batch_size = 50
         for start in range(0, len(documents), batch_size):
             end = start + batch_size
